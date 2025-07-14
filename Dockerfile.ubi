@@ -1,0 +1,292 @@
+ARG PYTHON_VERSION
+
+FROM nvcr.io/nvidia/cuda:12.8.1-devel-ubi9
+
+ARG PYTHON_VERSION
+
+WORKDIR /workspace
+
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    UV_LINK_MODE=copy \
+    TORCH_CUDA_ARCH_LIST="9.0;10.0;12.0+PTX" \
+    PYTHON_VERSION=${PYTHON_VERSION} \
+    UV_TORCH_BACKEND=${UV_TORCH_BACKEND:-cu128} \
+    VIRTUAL_ENV=/opt/vllm 
+
+RUN dnf install -y \
+    python${PYTHON_VERSION} python${PYTHON_VERSION}-pip python${PYTHON_VERSION}-wheel \
+    python${PYTHON_VERSION}-devel \
+    which procps findutils tar \
+    && dnf clean all
+
+RUN python${PYTHON_VERSION} -m venv /opt/vllm && \
+    ${VIRTUAL_ENV}/bin/pip install --no-cache -U pip wheel uv meson-python ninja pybind11
+
+# Enable EPEL for additional development packages
+RUN dnf install -y dnf-plugins-core && \
+    dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
+    dnf config-manager --set-enabled epel && \
+    dnf clean all
+
+# Install all build dependencies including networking and compilation tools
+RUN dnf install -y --allowerasing \
+    gcc gcc-c++ \
+    make cmake \
+    autoconf automake libtool \
+    git \
+    curl wget \
+    gzip \
+    zlib-devel \
+    openssl-devel \
+    pkg-config \
+    libuuid-devel \
+    glibc-devel \
+    python${PYTHON_VERSION}-devel \
+    rdma-core-devel \
+    numactl-libs \
+    subunit \
+    pciutils \
+    pciutils-libs \
+    ninja-build \
+    && dnf clean all
+
+ENV LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/lib:/usr/local/lib64" \
+CPATH="/usr/include:/usr/local/include:/usr/local/cuda/include" \
+PKG_CONFIG_PATH="/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig"
+
+# Build and install gdrcopy
+RUN git clone https://github.com/NVIDIA/gdrcopy.git && \
+    cd gdrcopy && \
+    PREFIX=/usr/local DESTLIB=/usr/local/lib make lib_install && \
+    cp src/libgdrapi.so.2.* /usr/lib64/ && \
+    ldconfig && \
+    cd .. && rm -rf gdrcopy
+
+# Build and install UCX
+RUN git clone https://github.com/openucx/ucx.git && \
+    cd ucx && \
+    git checkout v1.18.0 && \
+    ./autogen.sh && \
+    ./configure \
+        --enable-shared \
+        --disable-static \
+        --disable-doxygen-doc \
+        --enable-cma \
+        --enable-devel-headers \
+        --with-cuda=/usr/local/cuda \
+        --with-verbs \
+        --with-dm \
+        --with-gdrcopy=/usr/local \
+        --enable-mt \
+        --with-mlx5 \
+        --prefix=/usr/local && \
+    make -j$(nproc) && \
+    make install && \
+    ldconfig && \
+    cd .. && rm -rf ucx
+
+ARG NVSHMEM_VERSION=3.2.5-1
+ARG NVSHMEM_PPLX_VERSION=3.2.5-1
+
+# Copy patches before build
+COPY patches/ /tmp/patches/
+
+RUN cd /tmp && \
+    wget https://developer.nvidia.com/downloads/assets/secure/nvshmem/nvshmem_src_${NVSHMEM_VERSION}.txz && \
+    tar -xf nvshmem_src_${NVSHMEM_VERSION}.txz && \
+    cd nvshmem_src && \
+    git apply /tmp/patches/deepep_nvshmem.patch && \
+    mkdir build && \
+    cd build && \
+    cmake \
+    -G Ninja \
+    -DNVSHMEM_PREFIX=/opt/nvshmem-${NVSHMEM_VERSION} \
+    -DCMAKE_CUDA_ARCHITECTURES="90a;100" \
+    -DNVSHMEM_PMIX_SUPPORT=0 \
+    -DNVSHMEM_LIBFABRIC_SUPPORT=0 \
+    -DNVSHMEM_IBRC_SUPPORT=1 \
+    -DNVSHMEM_IBGDA_SUPPORT=1 \
+    -DNVSHMEM_IBDEVX_SUPPORT=1 \
+    -DNVSHMEM_SHMEM_SUPPORT=0 \
+    -DNVSHMEM_USE_GDRCOPY=1 \
+    -DNVSHMEM_MPI_SUPPORT=0 \
+    -DNVSHMEM_USE_NCCL=0 \
+    -DNVSHMEM_BUILD_TESTS=0 \
+    -DNVSHMEM_BUILD_EXAMPLES=0 \
+    -DGDRCOPY_HOME=/usr/local \
+    -DNVSHMEM_DISABLE_CUDA_VMM=1 \
+    .. && \
+    ninja -j$(nproc) && \
+    ninja install && \
+    cd /tmp && rm -rf nvshmem_src_${NVSHMEM_VERSION}*
+
+
+RUN cd /tmp && \
+    wget https://developer.nvidia.com/downloads/assets/secure/nvshmem/nvshmem_src_${NVSHMEM_PPLX_VERSION}.txz && \
+    tar -xf nvshmem_src_${NVSHMEM_PPLX_VERSION}.txz && \
+    cd nvshmem_src && \
+    mkdir build-pplx && \
+    cd build-pplx && \
+    cmake \
+      -G Ninja \
+      -DNVSHMEM_PREFIX=/opt/nvshmem-pplx-${NVSHMEM_PPLX_VERSION} \
+      -DCMAKE_CUDA_ARCHITECTURES="90a;100" \
+      -DNVSHMEM_PMIX_SUPPORT=0 \
+      -DNVSHMEM_LIBFABRIC_SUPPORT=0 \
+      -DNVSHMEM_IBRC_SUPPORT=1 \
+      -DNVSHMEM_IBGDA_SUPPORT=1 \
+      -DNVSHMEM_IBDEVX_SUPPORT=1 \
+      -DNVSHMEM_SHMEM_SUPPORT=0 \
+      -DNVSHMEM_USE_GDRCOPY=1 \
+      -DNVSHMEM_MPI_SUPPORT=0 \
+      -DNVSHMEM_USE_NCCL=0 \
+      -DNVSHMEM_BUILD_TESTS=0 \
+      -DNVSHMEM_BUILD_EXAMPLES=0 \
+      -DGDRCOPY_HOME=/usr/local \
+      -DNVSHMEM_DISABLE_CUDA_VMM=1 \
+      .. && \
+    ninja -j$(nproc) && \
+    ninja install && \
+    cd /tmp && rm -rf nvshmem_src_${NVSHMEM_PPLX_VERSION}*
+
+
+ARG NIXL_VERSION=0.3.0
+RUN ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib64/ && \
+    cd /opt && \
+    curl -fSsL "https://github.com/ai-dynamo/nixl/archive/refs/tags/${NIXL_VERSION}.tar.gz" | tar xz --strip-components=1 && \
+    export PATH="${VIRTUAL_ENV}/bin:$PATH" && \
+    export PYTHON="${VIRTUAL_ENV}/bin/python" && \
+    export PKG_CONFIG_PATH="/usr/lib64/pkgconfig:/usr/share/pkgconfig:${PKG_CONFIG_PATH}" && \
+    export CUDA_HOME="/usr/local/cuda" && \
+    export LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs/:/usr/local/cuda/extras/CUPTI/lib64:/usr/local/lib:/usr/local/lib64:/usr/lib64:${LD_LIBRARY_PATH}" && \
+    meson setup build --prefix=/usr/local && \
+    cd build && \
+    ninja && \
+    ninja install && \
+    cd .. && \
+    # Install nixl Python package directly
+    uv pip install --no-cache-dir . && \
+    rm -rf build
+
+RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/local.conf && \
+    echo "/usr/local/lib64" >> /etc/ld.so.conf.d/local.conf && \
+    ldconfig
+
+ENV NVSHMEM_PREFIX=/opt/nvshmem-3.2.5-1
+ENV NVSHMEM_PREFIX_PPLX=/opt/nvshmem-pplx-3.2.5-1
+ENV PATH="${NVSHMEM_PREFIX}/bin:${PATH}" \
+    LD_LIBRARY_PATH="${NVSHMEM_PREFIX}/lib:${LD_LIBRARY_PATH}" \
+    CPATH="${NVSHMEM_PREFIX}/include:${CPATH}" \
+    LIBRARY_PATH="${NVSHMEM_PREFIX}/lib:${LIBRARY_PATH}" \
+    PKG_CONFIG_PATH="${NVSHMEM_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}"
+
+# install vllm and lmcache 
+# Env to force rebuilding all layers below
+ENV LMCACHE_COMMIT_SHA=c1563bc9c72ea0d71156a3d9a6cd643170828acf
+ENV VLLM_COMMIT_SHA=66f6fbd393721c98440436ab067304ac4331219c
+
+WORKDIR /workspace
+RUN git clone https://github.com/neuralmagic/LMCache.git && \
+    cd LMCache && \
+    git checkout -q $LMCACHE_COMMIT_SHA && \
+    cd ..
+
+RUN git clone -b pd-launch-branch https://github.com/neuralmagic/vllm.git && \
+    cd vllm && \
+    git checkout -q $VLLM_COMMIT_SHA && \
+    cd ..
+
+# Use existing virtual environment at /opt/vllm
+WORKDIR /workspace/vllm
+
+# Install core dependencies (Torch first)
+RUN source /opt/vllm/bin/activate && \
+    uv pip install --upgrade pip && \
+    uv pip install torch==2.7.0+cu128
+
+# Install vllm editable
+RUN source /opt/vllm/bin/activate && \
+    VLLM_COMMIT=$(git merge-base HEAD origin/main) \
+    VLLM_PRECOMPILED_WHEEL_LOCATION=https://wheels.vllm.ai/${VLLM_COMMIT}/vllm-1.0.0.dev-cp38-abi3-manylinux1_x86_64.whl \
+    VLLM_USE_PRECOMPILED=1 uv pip install --editable .
+
+# Install related packages and cleanup
+RUN source /opt/vllm/bin/activate && \
+    uv pip install ../LMCache/ && \
+    uv pip install nixl
+
+# Install DeepEP and DeepGEMM after vLLM (they need PyTorch from the same environment)
+ARG DEEPEP_URL="https://github.com/neuralmagic/DeepEP"
+ARG DEEPGEMM_URL="https://github.com/neuralmagic/DeepGEMM"
+ARG PPLX_KERNELS_URL="https://github.com/neuralmagic/pplx-kernels"
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    source /opt/vllm/bin/activate && \
+    uv pip install build && \
+    # Install DeepEP
+    cd /tmp && \
+    git clone "${DEEPEP_URL}" deepep && \
+    cd deepep && \
+    # git checkout v1.1.0rc2_downstream && \
+    TORCH_CUDA_ARCH_LIST="9.0+PTX" NVSHMEM_DIR="${NVSHMEM_PREFIX}" python -m build --no-isolation && \
+    uv pip install dist/*.whl && \
+    cd .. && rm -rf deepep && \
+    # Install DeepGEMM
+    uv pip install cuda-python && \
+    git clone "${DEEPGEMM_URL}" deepgemm && \
+    cd deepgemm && \
+    # git checkout v1.0.0rc2_downstream && \
+    git submodule update --init --recursive && \
+    uv pip install setuptools-scm && \
+    python -m build --no-isolation && \
+    uv pip install dist/*.whl && \
+    cd .. && rm -rf deepgemm && \
+    # Install pplx-kernels
+    uv pip install numpy && \
+    git clone ${PPLX_KERNELS_URL} pplx-kernels && \
+    cd pplx-kernels && \
+    git checkout build-fixes && \
+    export PATH="${NVSHMEM_PREFIX_PPLX}/bin:${PATH}" && \
+    export LD_LIBRARY_PATH="${NVSHMEM_PREFIX_PPLX}/lib:${LD_LIBRARY_PATH}" && \
+    export CPATH="${NVSHMEM_PREFIX_PPLX}/include:${CPATH}" && \
+    export LIBRARY_PATH="${NVSHMEM_PREFIX_PPLX}/lib:${LIBRARY_PATH}" && \
+    python -m build --no-isolation && \
+    uv pip install dist/*.whl && \
+    cd .. && rm -rf pplx-kernels
+
+# enable fast downloads from hf and cleanup
+RUN --mount=type=cache,target=/root/.cache/uv \
+    source /opt/vllm/bin/activate && \
+    uv pip install hf-transfer hf-xet huggingface_hub[hf_transfer,hf_xet] && \
+    uv cache clean && \
+    rm -rf .git ../LMCache
+
+ENV HOME=/home/vllm \
+    # Allow requested max length to exceed what is extracted from the
+    # config.json
+    # see: https://github.com/vllm-project/vllm/pull/7080
+    VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 \
+    VLLM_USAGE_SOURCE=production-docker-image \
+    VLLM_WORKER_MULTIPROC_METHOD=fork \
+    VLLM_NO_USAGE_STATS=1 \
+    OUTLINES_CACHE_DIR=/tmp/outlines \
+    NUMBA_CACHE_DIR=/tmp/numba \
+    TRITON_CACHE_DIR=/tmp/triton \
+    # Setup NCCL monitoring with torch
+    # For tensor-parallel workloads, this monitors for NCCL deadlocks when
+    # one rank dies, and tears down the NCCL process groups so that the driver
+    # can cleanly exit.
+    TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=15 \
+    TORCH_NCCL_DUMP_ON_TIMEOUT=0
+
+# setup non-root user for OpenShift
+RUN umask 002 && \
+    useradd --uid 2000 --gid 0 vllm && \
+    mkdir -p /home/vllm && \
+    chmod g+rwx /home/vllm
+
+USER 2000
+WORKDIR /home/vllm
+
+ENTRYPOINT ["/opt/vllm/bin/python", "-m", "vllm.entrypoints.openai.api_server"]
