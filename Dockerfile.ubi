@@ -68,10 +68,11 @@ RUN --mount=type=cache,target=/var/cache/git \
     cd .. && rm -rf gdrcopy
 
 # Build and install UCX
+ARG UCX_VERSION="v1.18.1"
 RUN --mount=type=cache,target=/var/cache/git \
     git clone https://github.com/openucx/ucx.git && \
     cd ucx && \
-    git checkout v1.18.0 && \
+    git checkout ${UCX_VERSION} && \
     ./autogen.sh && \
     ./configure \
         --enable-shared \
@@ -92,11 +93,10 @@ RUN --mount=type=cache,target=/var/cache/git \
     cd .. && rm -rf ucx
 
 ARG NIXL_REPO_URL="https://github.com/ai-dynamo/nixl.git"
-ARG NIXL_COMMIT_SHA="v0.3.0"
+ARG NIXL_COMMIT_SHA="0.4.0"
 RUN --mount=type=cache,target=/tmp/nixl-cache \
     ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib64/ && \
-    mkdir /opt/nixl && \
-    cd /opt/nixl && \
+    mkdir /opt/nixl && cd /opt/nixl && \
     git clone ${NIXL_REPO_URL} . && \
     git checkout ${NIXL_COMMIT_SHA} && \
     export PATH="${VIRTUAL_ENV}/bin:$PATH" && \
