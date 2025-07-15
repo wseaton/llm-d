@@ -9,7 +9,7 @@ WORKDIR /workspace
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     UV_LINK_MODE=copy \
-    TORCH_CUDA_ARCH_LIST="9.0;10.0;12.0+PTX" \
+    TORCH_CUDA_ARCH_LIST="9.0;10.0+PTX" \
     PYTHON_VERSION=${PYTHON_VERSION} \
     UV_TORCH_BACKEND=${UV_TORCH_BACKEND:-cu128} \
     VIRTUAL_ENV=/opt/vllm 
@@ -165,7 +165,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     git clone "${DEEPEP_URL}" deepep && \
     cd deepep && \
     # git checkout v1.1.0rc2_downstream && \
-    TORCH_CUDA_ARCH_LIST="9.0;10.0+PTX" python -m build --no-isolation && \
+    python -m build --no-isolation && \
     uv pip install dist/*.whl && \
     cd .. && rm -rf deepep
 
@@ -191,6 +191,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     git clone ${PPLX_KERNELS_URL} pplx-kernels && \
     cd pplx-kernels && \
     git checkout build-fixes && \
+    # Note: This is some symlink magic to ensure nvshmem is found by CMake
+    # the pplx-kernels build system expects nvshmem to be in a prefix like /opt/nvshmem
     mkdir -p /opt/nvshmem && \
     ln -s /usr/lib64/nvshmem/12/* /opt/nvshmem/ && \
     cp -r /usr/include/nvshmem_12 /opt/include && \
@@ -204,13 +206,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install hf-transfer hf-xet huggingface_hub[hf_transfer,hf_xet]
 
 ENV HOME=/home/vllm \
-    # Allow requested max length to exceed what is extracted from the
-    # config.json
-    # see: https://github.com/vllm-project/vllm/pull/7080
-    VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 \
     VLLM_USAGE_SOURCE=production-docker-image \
     VLLM_WORKER_MULTIPROC_METHOD=fork \
-    VLLM_NO_USAGE_STATS=1 \
     OUTLINES_CACHE_DIR=/tmp/outlines \
     NUMBA_CACHE_DIR=/tmp/numba \
     TRITON_CACHE_DIR=/tmp/triton \
