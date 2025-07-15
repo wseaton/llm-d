@@ -91,11 +91,13 @@ RUN --mount=type=cache,target=/var/cache/git \
     ldconfig && \
     cd .. && rm -rf ucx
 
-ARG NIXL_VERSION=0.3.0
+ARG NIXL_REPO_URL="https://github.com/ai-dynamo/nixl.git"
+ARG NIXL_COMMIT_SHA="v0.3.0"
 RUN --mount=type=cache,target=/tmp/nixl-cache \
     ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib64/ && \
     cd /opt && \
-    curl -fSsL "https://github.com/ai-dynamo/nixl/archive/refs/tags/${NIXL_VERSION}.tar.gz" | tar xz --strip-components=1 && \
+    git clone ${NIXL_REPO_URL} . && \
+    git checkout ${NIXL_COMMIT_SHA} && \
     export PATH="${VIRTUAL_ENV}/bin:$PATH" && \
     export PYTHON="${VIRTUAL_ENV}/bin/python" && \
     export PKG_CONFIG_PATH="/usr/lib64/pkgconfig:/usr/share/pkgconfig:${PKG_CONFIG_PATH}" && \
