@@ -1,5 +1,12 @@
-FROM nvcr.io/nvidia/cuda:12.8.1-devel-ubi9
+ARG CUDA_MAJOR=12
+ARG CUDA_MINOR=8
+ARG CUDA_PATCH=1
 
+FROM nvcr.io/nvidia/cuda:${CUDA_MAJOR}.${CUDA_MINOR}.${CUDA_PATCH}-devel-ubi9
+
+ARG CUDA_MAJOR=12
+ARG CUDA_MINOR=8
+ARG CUDA_PATCH=1
 ARG PYTHON_VERSION
 
 WORKDIR /workspace
@@ -9,7 +16,7 @@ ENV LANG=C.UTF-8 \
     UV_LINK_MODE=copy \
     TORCH_CUDA_ARCH_LIST="9.0;10.0+PTX" \
     PYTHON_VERSION=${PYTHON_VERSION:-3.12} \
-    UV_TORCH_BACKEND=${UV_TORCH_BACKEND:-cu128} \
+    UV_TORCH_BACKEND=${UV_TORCH_BACKEND:-cu${CUDA_MAJOR}${CUDA_MINOR}} \
     VIRTUAL_ENV=/opt/vllm 
 
 # Install base packages and EPEL in single layer
@@ -21,7 +28,7 @@ RUN dnf install -y dnf-plugins-core && \
         python${PYTHON_VERSION} python${PYTHON_VERSION}-pip python${PYTHON_VERSION}-wheel \
         python${PYTHON_VERSION}-devel \
         # use nvidia's packaged nvshmem
-        nvshmem-cuda-12 \ 
+        nvshmem-cuda-${CUDA_MAJOR} \ 
         which procps findutils tar \
         gcc gcc-c++ \
         make cmake \
@@ -47,14 +54,14 @@ RUN python${PYTHON_VERSION} -m venv /opt/vllm && \
     ${VIRTUAL_ENV}/bin/pip install --no-cache -U pip wheel uv meson-python ninja pybind11
 
 ENV LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/lib:/usr/local/lib64" \
-CPATH="/usr/include:/usr/local/include:/usr/local/cuda/include" \
-PKG_CONFIG_PATH="/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig"
-
-# Set NVSHMEM paths for CMake discovery
-ENV NVSHMEM_DIR=/usr/lib64/nvshmem/12 \
-    PATH="/usr/bin/nvshmem_12:${PATH}" \
-    CPATH="/usr/include/nvshmem_12:${CPATH}" \
-    LIBRARY_PATH="/usr/lib64/nvshmem/12:${LIBRARY_PATH}"
+    CPATH="/usr/include:/usr/local/include:/usr/local/cuda/include" \
+    PKG_CONFIG_PATH="/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig" \
+    TRITON_LIBCUDA_PATH="/usr/lib64" \
+    # Set NVSHMEM paths for CMake discovery
+    NVSHMEM_DIR=/usr/lib64/nvshmem/${CUDA_MAJOR} \
+    PATH="/usr/bin/nvshmem_${CUDA_MAJOR}:${PATH}" \
+    CPATH="/usr/include/nvshmem_${CUDA_MAJOR}:${CPATH}" \
+    LIBRARY_PATH="/usr/lib64/nvshmem/${CUDA_MAJOR}:${LIBRARY_PATH}"
 
 # Build and install gdrcopy
 RUN --mount=type=cache,target=/var/cache/git \
@@ -141,7 +148,7 @@ WORKDIR /workspace/vllm
 # Install core dependencies (Torch first)
 RUN source /opt/vllm/bin/activate && \
     uv pip install --upgrade pip && \
-    uv pip install torch==2.7.0+cu128
+    uv pip install torch==2.7.0+cu${CUDA_MAJOR}${CUDA_MINOR}
 
 # Install vllm editable
 RUN source /opt/vllm/bin/activate && \
@@ -195,15 +202,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     # Note: This is some symlink magic to ensure nvshmem is found by CMake
     # the pplx-kernels build system expects nvshmem to be in a prefix like /opt/nvshmem
     mkdir -p /opt/nvshmem && \
-    ln -s /usr/lib64/nvshmem/12/* /opt/nvshmem/ && \
-    cp -r /usr/include/nvshmem_12 /opt/include && \
+    ln -s /usr/lib64/nvshmem/${CUDA_MAJOR}/* /opt/nvshmem/ && \
+    cp -r /usr/include/nvshmem_${CUDA_MAJOR} /opt/include && \
     NVSHMEM_PREFIX=/opt/nvshmem python -m build --no-isolation && \
     uv pip install dist/*.whl && \
     cd .. && rm -rf pplx-kernels
 
-# enable fast downloads from hf and cleanup
+# enable fast downloads from hf
 RUN --mount=type=cache,target=/root/.cache/uv \
-    source /opt/vllm/bin/activate && \
     uv pip install hf-transfer hf-xet huggingface_hub[hf_transfer,hf_xet]
 
 ENV HOME=/home/vllm \
