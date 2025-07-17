@@ -210,7 +210,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # enable fast downloads from hf
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install hf-transfer hf-xet huggingface_hub[hf_transfer,hf_xet]
+    source /opt/vllm/bin/activate && \
+    uv pip install huggingface_hub[hf_transfer,hf_xet]
 
 ENV HOME=/home/vllm \
     VLLM_USAGE_SOURCE=production-docker-image \
