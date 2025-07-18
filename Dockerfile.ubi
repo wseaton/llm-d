@@ -345,6 +345,9 @@ RUN --mount=type=cache,target=/var/cache/git \
     # Cleanup (keep /tmp/vllm for editable install)
     rm -rf /tmp/wheels
 
+
+RUN dnf remove -y git && dnf autoremove -y && dnf clean all
+
 # setup non-root user for OpenShift
 RUN umask 002 && \
     useradd --uid 2000 --gid 0 vllm && \
