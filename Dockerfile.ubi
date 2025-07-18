@@ -14,7 +14,7 @@ WORKDIR /workspace
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     UV_LINK_MODE=copy \
-    TORCH_CUDA_ARCH_LIST="9.0;10.0+PTX" \
+    TORCH_CUDA_ARCH_LIST="9.0+PTX" \
     PYTHON_VERSION=${PYTHON_VERSION:-3.12} \
     UV_TORCH_BACKEND=${UV_TORCH_BACKEND:-cu${CUDA_MAJOR}${CUDA_MINOR}} \
     VIRTUAL_ENV=/opt/vllm 
@@ -73,7 +73,7 @@ RUN --mount=type=cache,target=/var/cache/git \
     cd .. && rm -rf gdrcopy
 
 # Build and install UCX
-ARG UCX_VERSION="v1.18.1"
+ARG UCX_VERSION="v1.19.0-rc1"
 RUN --mount=type=cache,target=/var/cache/git \
     git clone https://github.com/openucx/ucx.git && \
     cd ucx && \
@@ -97,8 +97,11 @@ RUN --mount=type=cache,target=/var/cache/git \
     ldconfig && \
     cd .. && rm -rf ucx
 
+# https://github.com/ai-dynamo/nixl/tree/ucx_thread_pool
+# Temporarily use hotfix on 0.4 to avoid NIXL launch OH
+# via threadpool w/ UCX workers - to be fixed in nixl=0.5.
 ARG NIXL_REPO_URL="https://github.com/ai-dynamo/nixl.git"
-ARG NIXL_COMMIT_SHA="0.4.0"
+ARG NIXL_COMMIT_SHA="5a8fc6e28f8c07748824d14aece958d195e6f832"
 RUN --mount=type=cache,target=/tmp/nixl-cache \
     ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib64/ && \
     mkdir /opt/nixl && cd /opt/nixl && \
@@ -127,7 +130,7 @@ WORKDIR /workspace
 
 # Define commit SHAs as build args to avoid layer invalidation
 ARG LMCACHE_COMMIT_SHA=c1563bc9c72ea0d71156a3d9a6cd643170828acf
-ARG VLLM_COMMIT_SHA=66f6fbd393721c98440436ab067304ac4331219c
+ARG VLLM_COMMIT_SHA=8dfb45ca3379b3a789ec529af4bf725daa07f10d
 
 # Clone repositories with cache mounts
 RUN --mount=type=cache,target=/var/cache/git \
@@ -148,13 +151,9 @@ WORKDIR /workspace/vllm
 # Install core dependencies (Torch first)
 RUN source /opt/vllm/bin/activate && \
     uv pip install --upgrade pip && \
-    uv pip install torch==2.7.0+cu${CUDA_MAJOR}${CUDA_MINOR}
-
-# Install vllm editable
-RUN source /opt/vllm/bin/activate && \
     VLLM_COMMIT=$(git merge-base HEAD origin/main) \
     VLLM_PRECOMPILED_WHEEL_LOCATION=https://wheels.vllm.ai/${VLLM_COMMIT}/vllm-1.0.0.dev-cp38-abi3-manylinux1_x86_64.whl \
-    VLLM_USE_PRECOMPILED=1 uv pip install --editable .
+    VLLM_USE_PRECOMPILED=1 uv pip install .
 
 # Install related packages and cleanup
 RUN source /opt/vllm/bin/activate && \
@@ -214,8 +213,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install huggingface_hub[hf_transfer,hf_xet]
 
 ENV HOME=/home/vllm \
+    PATH="${VIRTUAL_ENV}/bin:${PATH}" \
     VLLM_USAGE_SOURCE=production-docker-image \
     VLLM_WORKER_MULTIPROC_METHOD=fork \
+    VLLM_SKIP_P2P_CHECK=1 \
     OUTLINES_CACHE_DIR=/tmp/outlines \
     NUMBA_CACHE_DIR=/tmp/numba \
     TRITON_CACHE_DIR=/tmp/triton \
@@ -224,7 +225,10 @@ ENV HOME=/home/vllm \
     # one rank dies, and tears down the NCCL process groups so that the driver
     # can cleanly exit.
     TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=15 \
-    TORCH_NCCL_DUMP_ON_TIMEOUT=0
+    TORCH_NCCL_DUMP_ON_TIMEOUT=0 \
+    # NOTE: workaround for hang with XET. This should be removed 
+    # in a future release when we get to the bottom of the issue.
+    HF_HUB_DISABLE_XET=1
 
 # setup non-root user for OpenShift
 RUN umask 002 && \
@@ -235,4 +239,4 @@ RUN umask 002 && \
 USER 2000
 WORKDIR /home/vllm
 
-ENTRYPOINT ["/opt/vllm/bin/python", "-m", "vllm.entrypoints.openai.api_server"]
+ENTRYPOINT ["python", "-m", "vllm.entrypoints.openai.api_server"]
