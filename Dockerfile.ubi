@@ -155,7 +155,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Temporarily use hotfix on 0.4 to avoid NIXL launch OH
 # via threadpool w/ UCX workers - to be fixed in nixl=0.5.
 ARG NIXL_REPO_URL="https://github.com/ai-dynamo/nixl.git"
-ARG NIXL_COMMIT_SHA="5a8fc6e28f8c07748824d14aece958d195e6f832"
+ARG NIXL_COMMIT_SHA="ba7e40760027796890ad17e95620526c3c5560ee"
 RUN --mount=type=cache,target=/tmp/nixl-cache \
     ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib64/ && \
     mkdir /opt/nixl && cd /opt/nixl && \
@@ -249,12 +249,6 @@ ARG CUDA_MAJOR=12
 ARG CUDA_MINOR=8
 ARG CUDA_PATCH=1
 ARG PYTHON_VERSION
-ARG DEEPEP_URL="https://github.com/neuralmagic/DeepEP"
-ARG DEEPGEMM_URL="https://github.com/neuralmagic/DeepGEMM"
-ARG PPLX_KERNELS_URL="https://github.com/neuralmagic/pplx-kernels"
-ARG UCX_VERSION="v1.18.1"
-ARG NIXL_REPO_URL="https://github.com/ai-dynamo/nixl.git"
-ARG NIXL_COMMIT_SHA="5a8fc6e28f8c07748824d14aece958d195e6f832"
 ARG NVSHMEM_VERSION=3.3.9
 
 ENV LANG=C.UTF-8 \
@@ -319,7 +313,6 @@ RUN python${PYTHON_VERSION} -m venv /opt/vllm && \
 COPY --from=builder /wheels/*.whl /tmp/wheels/
 
 # Define commit SHAs as build args to avoid layer invalidation
-ARG NVSHMEM_VERSION=3.3.9
 ARG LMCACHE_COMMIT_SHA=c1563bc9c72ea0d71156a3d9a6cd643170828acf
 ARG VLLM_COMMIT_SHA=8dfb45ca3379b3a789ec529af4bf725daa07f10d
 
